@@ -1,4 +1,4 @@
-import { CONFIG } from "./config.js";
+import { CONFIG } from "./config.js?v=20260916-2";
 import { loadDemoDB, saveDemoDB } from "./data.js";
 
 function wait(ms = 120) {
@@ -52,15 +52,45 @@ function plotStatus(plot, batches) {
 
 async function remote(action, payload = {}, token = "") {
   if (!CONFIG.API_URL) {
-    throw new Error("ยังไม่ได้ตั้งค่า API_URL ใน src/config.js");
+    throw new Error("ยังไม่ได้ตั้งค่า API_URL");
   }
-  const res = await fetch(CONFIG.API_URL, {
+
+  // บังคับไม่ให้มือถือ/Browser ใช้ API จาก cache
+  const separator = CONFIG.API_URL.includes("?") ? "&" : "?";
+  const url = `${CONFIG.API_URL}${separator}_=${Date.now()}`;
+
+  const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify({ action, token, payload }),
+    redirect: "follow",
+    cache: "no-store",
+    credentials: "omit",
+    headers: {
+      "Content-Type": "text/plain;charset=utf-8",
+    },
+    body: JSON.stringify({
+      action,
+      token,
+      payload,
+    }),
   });
-  const data = await res.json();
-  if (!data.ok) throw new Error(data.message || "เกิดข้อผิดพลาด");
+
+  const text = await res.text();
+
+  let data;
+
+  try {
+    data = JSON.parse(text);
+  } catch (error) {
+    console.error("API ตอบกลับ:", text);
+    throw new Error(
+      "เชื่อมต่อฐานข้อมูลไม่สำเร็จ กรุณาลองเข้าสู่ระบบอีกครั้ง"
+    );
+  }
+
+  if (!data.ok) {
+    throw new Error(data.message || "เกิดข้อผิดพลาด");
+  }
+
   return data.data;
 }
 
