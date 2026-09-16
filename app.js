@@ -1,6 +1,6 @@
-import { CONFIG } from "./config.js";
-import { api } from "./api.js";
-import { resetDemoDB } from "./data.js";
+import { CONFIG } from "./config.js?v=20260916-2";
+import { api } from "./api.js?v=20260916-2";
+import { resetDemoDB } from "./data.js?v=20260916-2";
 
 const app = document.getElementById("app");
 
