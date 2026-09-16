@@ -5,13 +5,13 @@
 export const CONFIG = {
   // true = ทดลองใน Browser ก่อน
   // false = ใช้ Google Sheets ผ่าน Google Apps Script
-  DEMO_MODE: true,
+  DEMO_MODE: false,
 
-  API_URL: "",
+  API_URL: "https://script.google.com/macros/s/AKfycbz6Rtvf5HKR9pkUhBROFaR-wLky0o46PrksqiS1kkMaWEwdIb33ndE4G_kVF-LzpLVI/exec",
 
   // ใส่ URL เว็บจริงหลังนำเว็บขึ้นออนไลน์
   // เช่น https://yourname.github.io/banana-harvest/
-  PUBLIC_APP_URL: "",
+  PUBLIC_APP_URL: "https://thiti15.github.io/banana-harvest-system/",
 
   APP_NAME: "ระบบติดตามการเก็บเกี่ยวกล้วย",
 
