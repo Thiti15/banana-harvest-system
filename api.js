@@ -1,5 +1,5 @@
-import { CONFIG } from "./config.js?v=20260916-2";
-import { loadDemoDB, saveDemoDB } from "./data.js";
+import { CONFIG } from "./config.js?v=20260923-2";
+import { loadDemoDB, saveDemoDB } from "./data.js?v=20260923-2";
 
 function wait(ms = 120) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -52,45 +52,36 @@ function plotStatus(plot, batches) {
 
 async function remote(action, payload = {}, token = "") {
   if (!CONFIG.API_URL) {
-    throw new Error("ยังไม่ได้ตั้งค่า API_URL");
+    throw new Error("ยังไม่ได้ตั้งค่า API_URL ใน config.js");
   }
 
-  // บังคับไม่ให้มือถือ/Browser ใช้ API จาก cache
   const separator = CONFIG.API_URL.includes("?") ? "&" : "?";
   const url = `${CONFIG.API_URL}${separator}_=${Date.now()}`;
 
-  const res = await fetch(url, {
-    method: "POST",
-    redirect: "follow",
-    cache: "no-store",
-    credentials: "omit",
-    headers: {
-      "Content-Type": "text/plain;charset=utf-8",
-    },
-    body: JSON.stringify({
-      action,
-      token,
-      payload,
-    }),
-  });
+  let res;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      redirect: "follow",
+      cache: "no-store",
+      credentials: "omit",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action, token, payload }),
+    });
+  } catch (err) {
+    throw new Error("เชื่อมต่อฐานข้อมูลไม่สำเร็จ กรุณาตรวจสอบอินเทอร์เน็ตแล้วลองอีกครั้ง");
+  }
 
   const text = await res.text();
-
   let data;
-
   try {
     data = JSON.parse(text);
-  } catch (error) {
-    console.error("API ตอบกลับ:", text);
-    throw new Error(
-      "เชื่อมต่อฐานข้อมูลไม่สำเร็จ กรุณาลองเข้าสู่ระบบอีกครั้ง"
-    );
+  } catch (err) {
+    console.error("API ตอบกลับไม่ใช่ JSON:", text);
+    throw new Error("เชื่อมต่อฐานข้อมูลไม่สำเร็จ กรุณาลองเข้าสู่ระบบอีกครั้ง");
   }
 
-  if (!data.ok) {
-    throw new Error(data.message || "เกิดข้อผิดพลาด");
-  }
-
+  if (!data.ok) throw new Error(data.message || "เกิดข้อผิดพลาด");
   return data.data;
 }
 

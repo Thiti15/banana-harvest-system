@@ -1,6 +1,6 @@
-import { CONFIG } from "./config.js?v=20260916-2";
-import { api } from "./api.js?v=20260916-2";
-import { resetDemoDB } from "./data.js?v=20260916-2";
+import { CONFIG } from "./config.js?v=20260923-2";
+import { api } from "./api.js?v=20260923-2";
+import { resetDemoDB } from "./data.js?v=20260923-2";
 
 const app = document.getElementById("app");
 
@@ -11,6 +11,9 @@ const state = {
   users: [],
   currentView: "dashboard",
   publicData: null,
+  calendarDate: new Date(),
+  reportFilters: { from: "", to: "", plotId: "", status: "" },
+  lastRefreshAt: null,
 };
 
 const fmt = (date) => {
@@ -72,8 +75,15 @@ async function boot() {
     return;
   }
 
-  await refreshData();
-  render();
+  try {
+    await refreshData();
+    render();
+  } catch (err) {
+    setSession(null);
+    renderLogin();
+    const el = document.getElementById("loginError");
+    if (el) el.textContent = err.message || "กรุณาเข้าสู่ระบบใหม่";
+  }
 }
 
 async function refreshData() {
@@ -84,6 +94,7 @@ async function refreshData() {
   if (user.role === "admin") {
     state.users = await api.getUsers(token);
   }
+  state.lastRefreshAt = new Date();
 }
 
 function renderLogin() {
@@ -109,7 +120,7 @@ function renderLogin() {
         </form>
 
         <div class="demo-box">
-          <strong>โหมดทดลอง:</strong> admin / 1234 &nbsp; หรือ &nbsp; user / 1234
+          <strong>บัญชีสำหรับทดสอบ:</strong> admin / 1234 &nbsp; หรือ &nbsp; user / 1234
         </div>
 
         <p id="loginError" class="error-text"></p>
@@ -144,8 +155,8 @@ function layout(content) {
         <div class="brand">
           <span>🍌</span>
           <div>
-            <b>Banana Harvest</b>
-            <small>Tracker</small>
+            <b>ระบบเก็บเกี่ยวกล้วย</b>
+            <small>ติดตามการเก็บเกี่ยว</small>
           </div>
         </div>
 
@@ -160,10 +171,13 @@ function layout(content) {
         <nav>
           ${navBtn("dashboard", "ภาพรวม", "🏠")}
           ${navBtn("plots", "จัดการแปลง", "🍌")}
+          ${navBtn("calendar", "ปฏิทินเก็บเกี่ยว", "📅")}
           ${navBtn("history", "ประวัติการเก็บเกี่ยว", "📜")}
+          ${navBtn("reports", "รายงานการเก็บเกี่ยว", "📄")}
           ${
             u.role === "admin"
-              ? navBtn("users", "จัดการผู้ใช้งาน", "👥")
+              ? navBtn("users", "จัดการผู้ใช้งาน", "👥") +
+                navBtn("database", "ฐานข้อมูล Google Sheets", "🗂️")
               : ""
           }
         </nav>
@@ -211,8 +225,11 @@ function viewTitle() {
     {
       dashboard: "ภาพรวมการเก็บเกี่ยว",
       plots: "จัดการแปลง",
+      calendar: "ปฏิทินวันเก็บเกี่ยว",
       history: "ประวัติการเก็บเกี่ยว",
+      reports: "รายงานการเก็บเกี่ยว",
       users: "จัดการผู้ใช้งาน",
+      database: "ฐานข้อมูล Google Sheets",
     }[state.currentView] || "ระบบ"
   );
 }
@@ -222,8 +239,11 @@ function render() {
 
   if (state.currentView === "dashboard") content = dashboardView();
   if (state.currentView === "plots") content = plotsView();
+  if (state.currentView === "calendar") content = calendarView();
   if (state.currentView === "history") content = historyView();
+  if (state.currentView === "reports") content = reportsView();
   if (state.currentView === "users") content = usersView();
+  if (state.currentView === "database") content = databaseView();
 
   app.innerHTML = layout(content);
   bindCommon();
@@ -232,25 +252,50 @@ function render() {
 
 function dashboardView() {
   const totalPlots = state.plots.length;
-  const near = state.batches.filter((b) => b.status === "ใกล้เก็บเกี่ยว").length;
-  const due = state.batches.filter((b) =>
-    ["ถึงกำหนดเก็บเกี่ยว", "เกินกำหนด"].includes(b.status)
-  ).length;
+  const totalTrees = state.plots.reduce((sum, p) => sum + Number(p.treeCount || 0), 0);
+  const unbunched = state.plots.reduce((sum, p) => sum + Number(p.remainingUnbunched || 0), 0);
+  const due = state.batches.filter((b) => ["ถึงกำหนดเก็บเกี่ยว", "เกินกำหนด"].includes(b.status)).length;
   const done = state.batches.filter((b) => b.status === "เก็บเกี่ยวแล้ว").length;
 
   const upcoming = state.batches
     .filter((b) => !b.actualHarvestDate && b.expectedHarvestDate)
-    .sort((a, b) =>
-      a.expectedHarvestDate.localeCompare(b.expectedHarvestDate)
-    )
-    .slice(0, 8);
+    .sort((a, b) => a.expectedHarvestDate.localeCompare(b.expectedHarvestDate))
+    .slice(0, 10);
+
+  const alerts = state.batches
+    .filter((b) => !b.actualHarvestDate && b.expectedHarvestDate && daysLeft(b.expectedHarvestDate) <= 14)
+    .sort((a, b) => a.expectedHarvestDate.localeCompare(b.expectedHarvestDate));
 
   return `
-    <div class="cards">
+    <div class="cards cards-five">
       ${statCard("แปลงทั้งหมด", totalPlots, "🍌")}
-      ${statCard("รุ่นใกล้เก็บ", near, "🟠")}
-      ${statCard("รุ่นถึง/เกินกำหนด", due, "🔴")}
+      ${statCard("ต้นทั้งหมด", totalTrees, "🌱")}
+      ${statCard("ยังไม่ออกเครือ", unbunched, "🟢")}
+      ${statCard("ถึง/เกินกำหนด", due, "🔴")}
       ${statCard("รุ่นเก็บแล้ว", done, "✅")}
+    </div>
+
+    <div class="panel alert-panel">
+      <div class="panel-head">
+        <div>
+          <h3>🔔 การแจ้งเตือนการเก็บเกี่ยว</h3>
+          <p>แจ้งรุ่นที่ใกล้ถึงกำหนด ภายใน 14 วัน และรุ่นที่เลยกำหนด</p>
+        </div>
+        <button class="btn small" data-view="calendar">เปิดปฏิทิน</button>
+      </div>
+      ${alerts.length ? `
+        <div class="notification-list">
+          ${alerts.slice(0, 8).map((b) => {
+            const p = state.plots.find((x) => x.id === b.plotId);
+            const d = daysLeft(b.expectedHarvestDate);
+            const text = d < 0 ? `เลยกำหนด ${Math.abs(d)} วัน` : d === 0 ? "ถึงกำหนดวันนี้" : `เหลือ ${d} วัน`;
+            return `<div class="notification-item ${d < 0 ? "danger-note" : "warn-note"}">
+              <div><b>${escapeHtml(p?.name || b.plotId)} • รุ่น ${b.batchNo}</b><span>${fmt(b.expectedHarvestDate)}</span></div>
+              <strong>${text}</strong>
+            </div>`;
+          }).join("")}
+        </div>
+      ` : `<p class="muted-text">ยังไม่มีรายการที่ต้องแจ้งเตือนในช่วงนี้</p>`}
     </div>
 
     <div class="panel">
@@ -261,47 +306,24 @@ function dashboardView() {
         </div>
       </div>
 
-      ${
-        upcoming.length
-          ? `
+      ${upcoming.length ? `
         <div class="table-wrap">
           <table>
-            <thead>
-              <tr>
-                <th>แปลง</th>
-                <th>รุ่น</th>
-                <th>จำนวนต้น</th>
-                <th>วันที่ออกเครือ</th>
-                <th>คาดว่าเก็บ</th>
-                <th>เหลือ</th>
-                <th>สถานะ</th>
-              </tr>
-            </thead>
+            <thead><tr><th>แปลง</th><th>รุ่น</th><th>จำนวนต้น</th><th>วันที่ออกเครือ</th><th>คาดว่าเก็บ</th><th>เหลือ</th><th>สถานะ</th></tr></thead>
             <tbody>
-              ${upcoming
-                .map((b) => {
-                  const p = state.plots.find((x) => x.id === b.plotId);
-                  return `
-                    <tr>
-                      <td><b>${b.plotId}</b> ${escapeHtml(p?.name || "")}</td>
-                      <td>รุ่น ${b.batchNo}</td>
-                      <td>${b.treeCount} ต้น</td>
-                      <td>${fmt(b.bunchDate)}</td>
-                      <td>${fmt(b.expectedHarvestDate)}</td>
-                      <td>${countdownText(b)}</td>
-                      <td><span class="badge ${statusClass(
-                        b.status
-                      )}">${b.status}</span></td>
-                    </tr>
-                  `;
-                })
-                .join("")}
+              ${upcoming.map((b) => {
+                const p = state.plots.find((x) => x.id === b.plotId);
+                return `<tr>
+                  <td><b>${b.plotId}</b> ${escapeHtml(p?.name || "")}</td>
+                  <td>รุ่น ${b.batchNo}</td><td>${b.treeCount} ต้น</td>
+                  <td>${fmt(b.bunchDate)}</td><td>${fmt(b.expectedHarvestDate)}</td>
+                  <td>${countdownText(b)}</td><td><span class="badge ${statusClass(b.status)}">${b.status}</span></td>
+                </tr>`;
+              }).join("")}
             </tbody>
           </table>
         </div>
-      `
-          : empty("ยังไม่มีรุ่นการเก็บเกี่ยว")
-      }
+      ` : empty("ยังไม่มีรุ่นการเก็บเกี่ยว")}
     </div>
   `;
 }
@@ -419,6 +441,153 @@ function plotCards(plots) {
     .join("");
 }
 
+
+function calendarView() {
+  const current = new Date(state.calendarDate.getFullYear(), state.calendarDate.getMonth(), 1);
+  const year = current.getFullYear();
+  const month = current.getMonth();
+  const monthLabel = current.toLocaleDateString("th-TH", { month: "long", year: "numeric" });
+  const firstDay = current.getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const cells = [];
+
+  for (let i = 0; i < firstDay; i++) cells.push(`<div class="calendar-day outside"></div>`);
+  for (let day = 1; day <= daysInMonth; day++) {
+    const key = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    const events = state.batches.filter((b) => b.expectedHarvestDate === key);
+    const today = new Date();
+    const isToday = today.getFullYear() === year && today.getMonth() === month && today.getDate() === day;
+    cells.push(`<div class="calendar-day ${isToday ? "today" : ""}">
+      <div class="day-number">${day}</div>
+      <div class="calendar-events">
+        ${events.slice(0, 4).map((b) => {
+          const p = state.plots.find((x) => x.id === b.plotId);
+          return `<button class="event-pill ${statusClass(b.status)} calendar-event" data-plot="${b.plotId}" title="${escapeHtml(p?.name || b.plotId)} รุ่น ${b.batchNo}">
+            ${escapeHtml(p?.name || b.plotId)} • รุ่น ${b.batchNo}
+          </button>`;
+        }).join("")}
+        ${events.length > 4 ? `<small>+ อีก ${events.length - 4} รายการ</small>` : ""}
+      </div>
+    </div>`);
+  }
+
+  return `<div class="panel calendar-panel">
+    <div class="panel-head calendar-toolbar">
+      <div><h3>ปฏิทินวันคาดเก็บเกี่ยว</h3><p>ดูวันเก็บเกี่ยวของทุกรุ่นในรูปแบบรายเดือน</p></div>
+      <div class="calendar-actions">
+        <button class="btn small" id="calPrev">‹ เดือนก่อน</button>
+        <button class="btn small" id="calToday">เดือนปัจจุบัน</button>
+        <button class="btn small" id="calNext">เดือนถัดไป ›</button>
+      </div>
+    </div>
+    <h2 class="calendar-month">${monthLabel}</h2>
+    <div class="calendar-grid calendar-heads">
+      ${["อา","จ","อ","พ","พฤ","ศ","ส"].map((d) => `<div>${d}</div>`).join("")}
+    </div>
+    <div class="calendar-grid">${cells.join("")}</div>
+    <div class="calendar-legend">
+      <span><i class="legend-dot info"></i> รอเก็บเกี่ยว</span>
+      <span><i class="legend-dot warn"></i> ใกล้เก็บเกี่ยว</span>
+      <span><i class="legend-dot danger"></i> ถึง/เกินกำหนด</span>
+      <span><i class="legend-dot ok"></i> เก็บเกี่ยวแล้ว</span>
+    </div>
+  </div>`;
+}
+
+function filteredReportRows() {
+  const f = state.reportFilters;
+  return state.batches.filter((b) => {
+    const date = b.actualHarvestDate || b.expectedHarvestDate || "";
+    if (f.from && date && date < f.from) return false;
+    if (f.to && date && date > f.to) return false;
+    if (f.plotId && b.plotId !== f.plotId) return false;
+    if (f.status && b.status !== f.status) return false;
+    return true;
+  }).sort((a, b) => String(a.expectedHarvestDate || "").localeCompare(String(b.expectedHarvestDate || "")));
+}
+
+function reportsView() {
+  const rows = filteredReportRows();
+  const totalTrees = rows.reduce((sum, b) => sum + Number(b.treeCount || 0), 0);
+  const harvested = rows.filter((b) => b.actualHarvestDate).length;
+  const pending = rows.filter((b) => !b.actualHarvestDate).length;
+  const f = state.reportFilters;
+
+  return `<div class="panel report-panel">
+    <div class="panel-head">
+      <div><h3>รายงานการเก็บเกี่ยว</h3><p>กรองข้อมูล พิมพ์รายงาน หรือบันทึกเป็น PDF และดาวน์โหลด CSV ได้</p></div>
+      <div class="report-actions">
+        <button class="btn" id="printReport">🖨️ พิมพ์ / บันทึก PDF</button>
+        <button class="btn primary" id="exportCsv">⬇ ดาวน์โหลด CSV</button>
+      </div>
+    </div>
+
+    <div class="report-filters no-print">
+      <label>ตั้งแต่<input type="date" id="reportFrom" value="${f.from}"></label>
+      <label>ถึง<input type="date" id="reportTo" value="${f.to}"></label>
+      <label>แปลง<select id="reportPlot"><option value="">ทุกแปลง</option>${state.plots.map((p) => `<option value="${p.id}" ${f.plotId === p.id ? "selected" : ""}>${p.id} - ${escapeHtml(p.name)}</option>`).join("")}</select></label>
+      <label>สถานะ<select id="reportStatus"><option value="">ทุกสถานะ</option>${["รอเก็บเกี่ยว","ใกล้เก็บเกี่ยว","ถึงกำหนดเก็บเกี่ยว","เกินกำหนด","เก็บเกี่ยวแล้ว"].map((st) => `<option ${f.status === st ? "selected" : ""}>${st}</option>`).join("")}</select></label>
+      <button class="btn" id="clearReportFilters">ล้างตัวกรอง</button>
+    </div>
+
+    <div class="cards report-summary">
+      ${statCard("จำนวนรุ่น", rows.length, "📦")}
+      ${statCard("จำนวนต้น", totalTrees, "🌱")}
+      ${statCard("เก็บแล้ว", harvested, "✅")}
+      ${statCard("รอเก็บ", pending, "⏳")}
+    </div>
+
+    <div class="print-title"><h2>รายงานการเก็บเกี่ยวกล้วย</h2><p>พิมพ์เมื่อ ${new Date().toLocaleString("th-TH")}</p></div>
+    ${rows.length ? `<div class="table-wrap"><table><thead><tr>
+      <th>แปลง</th><th>พันธุ์</th><th>รุ่น</th><th>จำนวนต้น</th><th>ออกเครือ</th><th>คาดว่าเก็บ</th><th>เก็บจริง</th><th>สถานะ</th>
+    </tr></thead><tbody>
+      ${rows.map((b) => {
+        const p = state.plots.find((x) => x.id === b.plotId);
+        return `<tr><td>${b.plotId} ${escapeHtml(p?.name || "")}</td><td>${escapeHtml(p?.variety || "-")}</td><td>รุ่น ${b.batchNo}</td><td>${b.treeCount}</td><td>${fmt(b.bunchDate)}</td><td>${fmt(b.expectedHarvestDate)}</td><td>${fmt(b.actualHarvestDate)}</td><td><span class="badge ${statusClass(b.status)}">${b.status}</span></td></tr>`;
+      }).join("")}
+    </tbody></table></div>` : empty("ไม่พบข้อมูลตามเงื่อนไข")}
+  </div>`;
+}
+
+function databaseView() {
+  if (state.session.user.role !== "admin") return empty("ไม่มีสิทธิ์เข้าถึง");
+  const connected = !CONFIG.DEMO_MODE && Boolean(CONFIG.API_URL);
+  return `<div class="panel database-card">
+    <div class="panel-head"><div><h3>การเชื่อมต่อฐานข้อมูล</h3><p>ระบบใช้ Google Sheets ผ่าน Google Apps Script เป็นฐานข้อมูลหลัก</p></div></div>
+    <div class="database-status ${connected ? "connected" : "disconnected"}">
+      <div class="db-icon">${connected ? "✅" : "⚠️"}</div>
+      <div><b>${connected ? "เชื่อมต่อ Google Sheets แล้ว" : "ยังไม่ได้ตั้งค่าการเชื่อมต่อ"}</b><p>${connected ? "ข้อมูลในหน้าเว็บถูกอ่านและบันทึกผ่าน Web App API" : "ตรวจสอบ API_URL ใน config.js"}</p></div>
+    </div>
+    <div class="info-strip database-info">
+      <div><span>โหมดระบบ</span><b>${CONFIG.DEMO_MODE ? "ทดลองใน Browser" : "Google Sheets"}</b></div>
+      <div><span>รีเฟรชข้อมูลล่าสุด</span><b>${state.lastRefreshAt ? state.lastRefreshAt.toLocaleString("th-TH") : "-"}</b></div>
+      <div><span>เว็บไซต์สาธารณะ</span><b class="break-text">${escapeHtml(CONFIG.PUBLIC_APP_URL || location.href)}</b></div>
+    </div>
+    <div class="actions no-print">
+      <button class="btn primary" id="refreshDatabase">🔄 รีเฟรชข้อมูลจาก Google Sheets</button>
+      ${CONFIG.SHEET_URL ? `<a class="btn" href="${CONFIG.SHEET_URL}" target="_blank" rel="noopener">เปิด Google Sheets</a>` : ""}
+    </div>
+    <p class="muted-text db-note">หมายเหตุ: ระบบบันทึกข้อมูลลง Google Sheets ทันทีเมื่อเพิ่ม/แก้ไขข้อมูล จึงไม่จำเป็นต้องกดซิงก์แยกต่างหาก</p>
+  </div>`;
+}
+
+function exportReportCsv() {
+  const rows = filteredReportRows();
+  const header = ["รหัสแปลง","ชื่อแปลง","พันธุ์","รุ่น","จำนวนต้น","วันที่ออกเครือ","วันที่คาดเก็บ","วันที่เก็บจริง","สถานะ"];
+  const body = rows.map((b) => {
+    const p = state.plots.find((x) => x.id === b.plotId);
+    return [b.plotId,p?.name || "",p?.variety || "",b.batchNo,b.treeCount,b.bunchDate || "",b.expectedHarvestDate || "",b.actualHarvestDate || "",b.status || ""];
+  });
+  const esc = (v) => `"${String(v ?? "").replaceAll('"','""')}"`;
+  const csv = "\ufeff" + [header, ...body].map((r) => r.map(esc).join(",")).join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `รายงานการเก็บเกี่ยว_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 function historyView() {
   const done = state.batches
     .filter((b) => b.actualHarvestDate)
@@ -498,7 +667,7 @@ function usersView() {
             <tr>
               <th>รหัส</th>
               <th>ชื่อ</th>
-              <th>Username</th>
+              <th>ชื่อผู้ใช้</th>
               <th>สิทธิ์</th>
               <th>สถานะ</th>
               <th></th>
@@ -512,11 +681,11 @@ function usersView() {
                 <td>${u.id}</td>
                 <td>${escapeHtml(u.name)}</td>
                 <td>${escapeHtml(u.username)}</td>
-                <td>${u.role}</td>
+                <td>${u.role === "admin" ? "ผู้ดูแลระบบ" : "ผู้ใช้งาน"}</td>
                 <td>
                   <span class="badge ${
                     u.status === "active" ? "ok" : "muted"
-                  }">${u.status}</span>
+                  }">${u.status === "active" ? "ใช้งาน" : "ปิดใช้งาน"}</span>
                 </td>
                 <td>
                   <button class="btn small user-edit" data-id="${u.id}">
@@ -589,6 +758,62 @@ function bindView() {
     search.oninput = apply;
     status.onchange = apply;
     bindPlotButtons();
+  }
+
+
+  if (state.currentView === "calendar") {
+    document.getElementById("calPrev").onclick = () => {
+      state.calendarDate = new Date(state.calendarDate.getFullYear(), state.calendarDate.getMonth() - 1, 1);
+      render();
+    };
+    document.getElementById("calNext").onclick = () => {
+      state.calendarDate = new Date(state.calendarDate.getFullYear(), state.calendarDate.getMonth() + 1, 1);
+      render();
+    };
+    document.getElementById("calToday").onclick = () => {
+      state.calendarDate = new Date();
+      render();
+    };
+    document.querySelectorAll(".calendar-event").forEach((btn) => {
+      btn.onclick = () => openPlotDetails(btn.dataset.plot);
+    });
+  }
+
+  if (state.currentView === "reports") {
+    const syncFilters = () => {
+      state.reportFilters = {
+        from: document.getElementById("reportFrom").value,
+        to: document.getElementById("reportTo").value,
+        plotId: document.getElementById("reportPlot").value,
+        status: document.getElementById("reportStatus").value,
+      };
+      render();
+    };
+    ["reportFrom","reportTo","reportPlot","reportStatus"].forEach((id) => {
+      document.getElementById(id).onchange = syncFilters;
+    });
+    document.getElementById("clearReportFilters").onclick = () => {
+      state.reportFilters = { from: "", to: "", plotId: "", status: "" };
+      render();
+    };
+    document.getElementById("printReport").onclick = () => window.print();
+    document.getElementById("exportCsv").onclick = exportReportCsv;
+  }
+
+  if (state.currentView === "database") {
+    const btn = document.getElementById("refreshDatabase");
+    if (btn) btn.onclick = async () => {
+      btn.disabled = true;
+      btn.textContent = "กำลังรีเฟรช...";
+      try {
+        await refreshData();
+        render();
+      } catch (err) {
+        alert(err.message);
+        btn.disabled = false;
+        btn.textContent = "🔄 รีเฟรชข้อมูลจาก Google Sheets";
+      }
+    };
   }
 
   if (state.currentView === "users") {
@@ -1035,7 +1260,7 @@ function openUserModal(user = null) {
       </label>
 
       <label>
-        Username
+        ชื่อผู้ใช้
         <input
           name="username"
           required
@@ -1057,10 +1282,10 @@ function openUserModal(user = null) {
         สิทธิ์
         <select name="role">
           <option value="user" ${u.role !== "admin" ? "selected" : ""}>
-            user
+            ผู้ใช้งาน
           </option>
           <option value="admin" ${u.role === "admin" ? "selected" : ""}>
-            admin
+            ผู้ดูแลระบบ
           </option>
         </select>
       </label>
@@ -1071,12 +1296,12 @@ function openUserModal(user = null) {
           <option value="active" ${
             u.status !== "inactive" ? "selected" : ""
           }>
-            active
+            ใช้งาน
           </option>
           <option value="inactive" ${
             u.status === "inactive" ? "selected" : ""
           }>
-            inactive
+            ปิดใช้งาน
           </option>
         </select>
       </label>
@@ -1119,7 +1344,7 @@ function openQR(plotId) {
 
   const modal = makeModal(`
     <div class="modal-head">
-      <h3>QR Code • ${plotId}</h3>
+      <h3>คิวอาร์โค้ด • ${plotId}</h3>
       <button class="x">×</button>
     </div>
 
