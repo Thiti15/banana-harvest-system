@@ -187,7 +187,7 @@ function layout(content) {
           <span class="brand-icon">🍌</span>
           <div>
             <strong>ระบบติดตามการเก็บเกี่ยวกล้วย</strong>
-            <small>เมนูง่าย ตัวอักษรชัด</small>
+           
           </div>
         </div>
 
